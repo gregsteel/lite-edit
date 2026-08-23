@@ -94,6 +94,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let viewItem = NSMenuItem()
         let viewMenu = NSMenu(title: "View")
         viewMenu.addItem(item("Toggle Sidebar", #selector(doToggleSidebar), "b"))
+        let previewItem = item("Toggle Markdown Preview", #selector(doToggleMarkdownPreview), "v")
+        previewItem.keyEquivalentModifierMask = [.command, .shift]
+        viewMenu.addItem(previewItem)
         viewItem.submenu = viewMenu
         main.addItem(viewItem)
 
@@ -194,4 +197,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func doGoToLine()      { ensureWindowControllerReady().showGoToLine() }
     @objc func doQuickOpen()     { ensureWindowControllerReady().showQuickOpen() }
     @objc func doToggleSidebar() { ensureWindowControllerReady().toggleSidebar() }
+    @objc func doToggleMarkdownPreview() { ensureWindowControllerReady().toggleMarkdownPreview() }
 }

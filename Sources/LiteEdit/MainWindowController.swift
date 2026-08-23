@@ -9,10 +9,12 @@ final class MainWindowController: NSWindowController,
     QuickOpenDelegate
 {
     private var splitView: NSSplitView!
+    private var editorSplit: NSSplitView!
     private var sidebarVC: SidebarViewController!
     private var tabBar: TabBarView!
     private var findBar: FindBarView!
     private var editorVC: EditorViewController!
+    private var previewVC: MarkdownPreviewViewController!
     private var statusBar: StatusBarView!
 
     private var quickOpen: QuickOpenPanel?
@@ -21,6 +23,9 @@ final class MainWindowController: NSWindowController,
     private var documents: [Document] = []
     private var curIdx: Int = -1
     private var sidebarManuallyCollapsed = false
+    /// When true, preview auto-appears for Markdown files. Toggle with ⌘⇧V.
+    private var markdownPreviewEnabled = true
+    private var markdownPreviewVisible = false
 
     private var curDoc: Document? {
         guard curIdx >= 0, curIdx < documents.count else { return nil }
@@ -103,13 +108,27 @@ final class MainWindowController: NSWindowController,
         let sideView = sidebarVC.view
         sideView.setFrameSize(NSSize(width: 220, height: splitView.bounds.height))
 
+        editorSplit = NSSplitView()
+        editorSplit.isVertical = true
+        editorSplit.dividerStyle = .thin
+        editorSplit.delegate = self
+        editorSplit.autoresizingMask = [.width, .height]
+
         editorVC = EditorViewController()
         editorVC.delegate = self
         let editorView = editorVC.view
-        editorView.setFrameSize(NSSize(width: splitView.bounds.width - 221, height: splitView.bounds.height))
+
+        previewVC = MarkdownPreviewViewController()
+        _ = previewVC.view // load eagerly
+
+        // Start with editor only; preview is added when a Markdown file is active.
+        editorSplit.addSubview(editorView)
+        editorView.frame = editorSplit.bounds
+        editorView.autoresizingMask = NSView.AutoresizingMask([.width, .height])
+        editorSplit.setHoldingPriority(.defaultLow, forSubviewAt: 0)
 
         splitView.addSubview(sideView)
-        splitView.addSubview(editorView)
+        splitView.addSubview(editorSplit)
         splitView.setHoldingPriority(.defaultHigh, forSubviewAt: 0)
         splitView.setHoldingPriority(.defaultLow, forSubviewAt: 1)
 
@@ -354,6 +373,64 @@ final class MainWindowController: NSWindowController,
         updateTabBarFrame()
     }
 
+    func toggleMarkdownPreview() {
+        markdownPreviewEnabled.toggle()
+        syncMarkdownPreview(immediate: true)
+    }
+
+    /// Shows the preview for Markdown when enabled; removes it for every other file type.
+    private func syncMarkdownPreview(immediate: Bool = false) {
+        let wantVisible = markdownPreviewEnabled && curDoc?.language == .markdown
+        if wantVisible != markdownPreviewVisible {
+            markdownPreviewVisible = wantVisible
+            applyMarkdownPreviewVisibility(refresh: wantVisible)
+        } else if wantVisible {
+            refreshMarkdownPreview(immediate: immediate)
+        }
+    }
+
+    private func applyMarkdownPreviewVisibility(refresh: Bool) {
+        let editorView = editorVC.view
+        let previewView = previewVC.view
+
+        if markdownPreviewVisible {
+            if previewView.superview !== editorSplit {
+                // Ensure editor is first; then add preview beside it.
+                if editorView.superview !== editorSplit {
+                    editorSplit.addSubview(editorView)
+                }
+                editorSplit.addSubview(previewView)
+                editorSplit.setHoldingPriority(.defaultLow, forSubviewAt: 0)
+                editorSplit.setHoldingPriority(.defaultLow, forSubviewAt: 1)
+            }
+            editorSplit.adjustSubviews()
+            let width = editorSplit.bounds.width
+            if width > 160 {
+                editorSplit.setPosition(width * 0.5, ofDividerAt: 0)
+            }
+            if refresh { refreshMarkdownPreview(immediate: true) }
+        } else {
+            if previewView.superview === editorSplit {
+                previewView.removeFromSuperview()
+            }
+            if editorView.superview !== editorSplit {
+                editorSplit.addSubview(editorView)
+            }
+            editorSplit.adjustSubviews()
+            editorView.frame = editorSplit.bounds
+            editorView.autoresizingMask = NSView.AutoresizingMask([.width, .height])
+        }
+    }
+
+    private func refreshMarkdownPreview(immediate: Bool = false) {
+        guard markdownPreviewVisible, let doc = curDoc, doc.language == .markdown else { return }
+        previewVC.update(
+            markdown: editorVC.textView.string,
+            baseURL: doc.fileURL,
+            debounce: !immediate
+        )
+    }
+
     func showFind() {
         guard let cv = window?.contentView else { return }
         let tabH: CGFloat = 32
@@ -433,26 +510,43 @@ final class MainWindowController: NSWindowController,
 
     private func refreshStatus() {
         if let doc = curDoc { statusBar.updateLanguage(doc.language) }
+        syncMarkdownPreview(immediate: true)
     }
 
     // MARK: - NSSplitViewDelegate
 
     func splitView(_ sv: NSSplitView, constrainMinCoordinate pos: CGFloat, ofSubviewAt idx: Int) -> CGFloat {
-        idx == 0 ? 150 : pos
+        if sv === editorSplit {
+            guard markdownPreviewVisible else { return 0 }
+            return idx == 0 ? 180 : pos
+        }
+        return idx == 0 ? 150 : pos
     }
 
     func splitView(_ sv: NSSplitView, constrainMaxCoordinate pos: CGFloat, ofSubviewAt idx: Int) -> CGFloat {
-        idx == 0 ? sv.bounds.width - 400 : pos
+        if sv === editorSplit {
+            guard markdownPreviewVisible else { return sv.bounds.width }
+            return idx == 0 ? max(180, sv.bounds.width - 180) : pos
+        }
+        return idx == 0 ? sv.bounds.width - 400 : pos
     }
 
     func splitView(_ sv: NSSplitView, canCollapseSubview subview: NSView) -> Bool {
-        subview === sidebarVC.view && sidebarManuallyCollapsed
+        if subview === sidebarVC.view { return sidebarManuallyCollapsed }
+        if subview === previewVC.view { return true }
+        return false
     }
 
     func splitView(_ sv: NSSplitView, shouldCollapseSubview subview: NSView, forDoubleClickOnDividerAt dividerIndex: Int) -> Bool {
         if subview === sidebarVC.view {
             sidebarManuallyCollapsed = true
             return true
+        }
+        if subview === previewVC.view {
+            markdownPreviewEnabled = false
+            markdownPreviewVisible = false
+            applyMarkdownPreviewVisibility(refresh: false)
+            return false // we already removed it
         }
         return false
     }
@@ -467,6 +561,7 @@ final class MainWindowController: NSWindowController,
         if let doc = curDoc {
             tabBar.updateTab(at: curIdx, item: TabItem(title: doc.displayName, isModified: doc.isModified))
         }
+        refreshMarkdownPreview()
     }
     func editorCursorMoved(_ vc: EditorViewController, line: Int, col: Int) { statusBar.updateCursor(line: line, col: col) }
 

@@ -288,7 +288,11 @@ final class MainWindowController: NSWindowController,
     func saveDocument() {
         guard let doc = curDoc else { return }
         if doc.fileURL != nil {
-            do { try doc.save(); refreshTabs() } catch { NSAlert(error: error).runModal() }
+            do {
+                try doc.save()
+                refreshTabs()
+                sidebarVC.refreshGitStatus()
+            } catch { NSAlert(error: error).runModal() }
         } else { saveDocumentAs() }
     }
 
@@ -303,6 +307,7 @@ final class MainWindowController: NSWindowController,
                 self?.refreshTabs(); self?.refreshStatus()
                 self?.window?.title = "LiteEdit — \(doc.displayName)"
                 RecentItems.addFile(url)
+                self?.sidebarVC.refreshGitStatus()
             } catch { NSAlert(error: error).runModal() }
         }
     }
@@ -453,6 +458,13 @@ final class MainWindowController: NSWindowController,
         a.beginSheetModal(for: window!) { [weak self] r in
             guard r == .alertFirstButtonReturn, let ln = Int(input.stringValue) else { return }
             self?.editorVC.goToLine(ln)
+        }
+    }
+
+    func beautifyDocument() {
+        if !editorVC.beautify() {
+            // Invalid JSON / already formatted — subtle, no alert spam
+            NSSound.beep()
         }
     }
 

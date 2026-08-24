@@ -34,6 +34,10 @@ enum Theme {
 
     static let findBarBg        = NSColor(srgbRed: 0.180, green: 0.184, blue: 0.161, alpha: 1)
 
+    static let gitModified      = NSColor(srgbRed: 0.902, green: 0.859, blue: 0.455, alpha: 1) // yellow
+    static let gitAdded         = NSColor(srgbRed: 0.651, green: 0.886, blue: 0.182, alpha: 1) // green
+    static let gitDeleted       = NSColor(srgbRed: 0.976, green: 0.149, blue: 0.447, alpha: 1) // pink
+
     static let editorFont       = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
     static let lineNumFont      = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
     static let uiFont           = NSFont.systemFont(ofSize: 12, weight: .regular)

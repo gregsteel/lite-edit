@@ -382,4 +382,30 @@ final class EditorViewController: NSViewController, NSTextViewDelegate {
             textView.scrollRangeToVisible(lr)
         }
     }
+
+    // MARK: - Beautify
+
+    /// Formats the current document. Returns `false` if nothing changed or formatting failed.
+    @discardableResult
+    func beautify() -> Bool {
+        guard let doc = document else { return false }
+        let original = textView.string
+        guard let formatted = Beautifier.beautify(original, language: doc.language),
+              formatted != original else { return false }
+
+        let full = NSRange(location: 0, length: (original as NSString).length)
+        if textView.shouldChangeText(in: full, replacementString: formatted) {
+            textView.replaceCharacters(in: full, with: formatted)
+            textView.didChangeText()
+        } else {
+            textView.string = formatted
+            doc.content = formatted
+            doc.markModified()
+            delegate?.editorTextDidChange(self)
+        }
+        // Full replace leaves only the caret line highlighted via textDidChange — redo all colours.
+        rehighlightAll()
+        lineNumbers?.needsDisplay = true
+        return true
+    }
 }

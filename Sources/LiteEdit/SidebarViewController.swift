@@ -83,6 +83,8 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     private var rootItems: [FileItem] = []
     private(set) var rootFolderURL: URL?
     private var suppressSelectionCallback = false
+    let gitStatus = GitStatusStore()
+    private var gitTimer: Timer?
 
     override func loadView() {
         let wrapper = NSView()
@@ -144,6 +146,10 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         view = wrapper
     }
 
+    deinit {
+        gitTimer?.invalidate()
+    }
+
     func openFolder(_ url: URL) {
         rootFolderURL = url
         let root = FileItem(url: url, isDir: true)
@@ -151,6 +157,23 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         rootItems = root.children ?? []
         headerLabel.stringValue = url.lastPathComponent.uppercased()
         outlineView.reloadData()
+        gitStatus.setFolder(url)
+        refreshGitStatus()
+        gitTimer?.invalidate()
+        gitTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+            self?.refreshGitStatus()
+        }
+    }
+
+    func refreshGitStatus() {
+        gitStatus.refresh(immediate: false) { [weak self] in
+            self?.reloadVisibleIcons()
+        }
+    }
+
+    private func reloadVisibleIcons() {
+        let rows = IndexSet(integersIn: 0..<outlineView.numberOfRows)
+        outlineView.reloadData(forRowIndexes: rows, columnIndexes: IndexSet(integer: 0))
     }
 
     /// Expand parent directories and select the row matching `url`.
@@ -223,16 +246,15 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         let cell = NSTableCellView()
         let iv = NSImageView()
         iv.translatesAutoresizingMaskIntoConstraints = false
+        let git = fi.isDirectory ? nil : gitStatus.status(for: fi.url)
         let iconName = fi.isDirectory ? "folder.fill" : fileIcon(fi.url)
         iv.image = NSImage(systemSymbolName: iconName, accessibilityDescription: nil)
-        iv.contentTintColor = fi.isDirectory
-            ? NSColor(srgbRed: 0.4, green: 0.85, blue: 0.94, alpha: 1)
-            : Theme.sidebarText
+        iv.contentTintColor = iconTint(fi: fi, git: git)
         iv.imageScaling = .scaleProportionallyDown
 
         let tf = NSTextField(labelWithString: fi.name)
         tf.font = Theme.uiFontSmall
-        tf.textColor = Theme.sidebarText
+        tf.textColor = textColor(fi: fi, git: git)
         tf.lineBreakMode = .byTruncatingTail
         tf.translatesAutoresizingMaskIntoConstraints = false
 
@@ -277,6 +299,27 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         case "go":                           return "arrow.right.arrow.left"
         case "yml", "yaml", "toml":          return "list.bullet.indent"
         default:                             return "doc"
+        }
+    }
+
+    private func iconTint(fi: FileItem, git: GitFileStatus?) -> NSColor {
+        if fi.isDirectory {
+            return NSColor(srgbRed: 0.4, green: 0.85, blue: 0.94, alpha: 1)
+        }
+        switch git {
+        case .modified: return Theme.gitModified
+        case .added:    return Theme.gitAdded
+        case .deleted:  return Theme.gitDeleted
+        case nil:       return Theme.sidebarText
+        }
+    }
+
+    private func textColor(fi: FileItem, git: GitFileStatus?) -> NSColor {
+        switch git {
+        case .modified: return Theme.gitModified
+        case .added:    return Theme.gitAdded
+        case .deleted:  return Theme.gitDeleted
+        case nil:       return Theme.sidebarText
         }
     }
 }

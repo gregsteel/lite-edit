@@ -32,6 +32,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return true
     }
 
+    func application(_ application: NSApplication, open urls: [URL]) {
+        let wc = ensureWindowControllerReady()
+        for url in urls where url.isFileURL {
+            wc.openFile(url)
+        }
+    }
+
     // MARK: - Menu bar
 
     private func buildMenu() {
@@ -41,6 +48,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About LiteEdit", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(.separator())
+        appMenu.addItem(item("Register as Default for Common Types…", #selector(doRegisterDefaults), ""))
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit LiteEdit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
@@ -77,6 +86,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(.separator())
+        let beautify = item("Beautify", #selector(doBeautify), "f")
+        beautify.keyEquivalentModifierMask = [.option, .shift]
+        editMenu.addItem(beautify)
         editItem.submenu = editMenu
         main.addItem(editItem)
 
@@ -198,4 +211,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func doQuickOpen()     { ensureWindowControllerReady().showQuickOpen() }
     @objc func doToggleSidebar() { ensureWindowControllerReady().toggleSidebar() }
     @objc func doToggleMarkdownPreview() { ensureWindowControllerReady().toggleMarkdownPreview() }
+    @objc func doBeautify() { ensureWindowControllerReady().beautifyDocument() }
+
+    @objc func doRegisterDefaults() {
+        let wc = ensureWindowControllerReady()
+        DefaultAppRegistrar.confirmAndRegister(from: wc.window)
+    }
 }

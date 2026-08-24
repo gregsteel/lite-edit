@@ -53,14 +53,85 @@ cat > "${BUNDLE}/Contents/Info.plist" << 'PLIST'
   <array>
     <dict>
       <key>CFBundleTypeName</key>
-      <string>All Files</string>
+      <string>Text Document</string>
       <key>CFBundleTypeRole</key>
       <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Owner</string>
       <key>LSItemContentTypes</key>
       <array>
-        <string>public.text</string>
         <string>public.plain-text</string>
+        <string>public.utf8-plain-text</string>
+        <string>public.json</string>
+        <string>public.xml</string>
+        <string>public.yaml</string>
+        <string>public.comma-separated-values-text</string>
+        <string>net.daringfireball.markdown</string>
+        <string>com.apple.property-list</string>
+        <string>com.apple.log</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>txt</string>
+        <string>text</string>
+        <string>md</string>
+        <string>markdown</string>
+        <string>json</string>
+        <string>yaml</string>
+        <string>yml</string>
+        <string>xml</string>
+        <string>toml</string>
+        <string>plist</string>
+        <string>log</string>
+        <string>ini</string>
+        <string>cfg</string>
+        <string>conf</string>
+        <string>config</string>
+        <string>env</string>
+        <string>properties</string>
+        <string>gitignore</string>
+        <string>editorconfig</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Source Code</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
         <string>public.source-code</string>
+        <string>public.script</string>
+        <string>public.shell-script</string>
+        <string>public.html</string>
+        <string>public.css</string>
+        <string>public.swift-source</string>
+        <string>public.c-source</string>
+        <string>public.c-header</string>
+        <string>public.c-plus-plus-source</string>
+        <string>com.netscape.javascript-source</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>swift</string>
+        <string>py</string>
+        <string>js</string>
+        <string>ts</string>
+        <string>tsx</string>
+        <string>html</string>
+        <string>htm</string>
+        <string>css</string>
+        <string>go</string>
+        <string>rs</string>
+        <string>c</string>
+        <string>h</string>
+        <string>cpp</string>
+        <string>java</string>
+        <string>rb</string>
+        <string>sh</string>
+        <string>sql</string>
       </array>
     </dict>
   </array>

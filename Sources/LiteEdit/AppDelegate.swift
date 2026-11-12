@@ -23,6 +23,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let wc = windowController, wc.hasUnsavedChanges, !wc.unsavedChangesReviewed,
+              wc.window?.isVisible == true else { return .terminateNow }
+        wc.reviewUnsavedChanges { ok in sender.reply(toApplicationShouldTerminate: ok) }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         windowController?.saveSession()
     }
@@ -97,7 +104,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let findItem = NSMenuItem()
         let findMenu = NSMenu(title: "Find")
         findMenu.addItem(item("Find...", #selector(doFind), "f"))
-        findMenu.addItem(item("Go to Line...", #selector(doGoToLine), "g"))
+        let replaceItem = item("Find and Replace...", #selector(doFindReplace), "f")
+        replaceItem.keyEquivalentModifierMask = [.command, .option]
+        findMenu.addItem(replaceItem)
+        findMenu.addItem(item("Find Next", #selector(doFindNext), "g"))
+        findMenu.addItem(item("Find Previous", #selector(doFindPrev), "G"))
+        findMenu.addItem(.separator())
+        findMenu.addItem(item("Go to Line...", #selector(doGoToLine), "l"))
         findMenu.addItem(.separator())
         findMenu.addItem(item("Quick Open...", #selector(doQuickOpen), "p"))
         findItem.submenu = findMenu
@@ -207,6 +220,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func doSaveAs()        { ensureWindowControllerReady().saveDocumentAs() }
     @objc func doClose()         { ensureWindowControllerReady().closeCurrentTab() }
     @objc func doFind()          { ensureWindowControllerReady().showFind() }
+    @objc func doFindReplace()   { ensureWindowControllerReady().showFind(replace: true) }
+    @objc func doFindNext()      { ensureWindowControllerReady().findNextFromMenu(backwards: false) }
+    @objc func doFindPrev()      { ensureWindowControllerReady().findNextFromMenu(backwards: true) }
     @objc func doGoToLine()      { ensureWindowControllerReady().showGoToLine() }
     @objc func doQuickOpen()     { ensureWindowControllerReady().showQuickOpen() }
     @objc func doToggleSidebar() { ensureWindowControllerReady().toggleSidebar() }

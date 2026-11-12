@@ -139,7 +139,18 @@ cat > "${BUNDLE}/Contents/Info.plist" << 'PLIST'
 </plist>
 PLIST
 
+# Version = UTC date/time of the last change: newest uncommitted edit if the tree is dirty,
+# otherwise the last commit. Short: YYYY.MM.DD  Build: YYYY.MM.DD.HHMM
+STAMP=$(git log -1 --format=%ct 2>/dev/null || date +%s)
+while IFS= read -r f; do
+  [ -f "$f" ] && m=$(stat -f %m "$f") && [ "$m" -gt "$STAMP" ] && STAMP=$m
+done < <(git status --porcelain 2>/dev/null | cut -c4- | sed 's/.* -> //')
+SHORT_VERSION=$(TZ=UTC date -r "$STAMP" +%Y.%m.%d)
+BUILD_VERSION=$(TZ=UTC date -r "$STAMP" +%Y.%m.%d.%H%M)
+plutil -replace CFBundleShortVersionString -string "$SHORT_VERSION" "${BUNDLE}/Contents/Info.plist"
+plutil -replace CFBundleVersion -string "$BUILD_VERSION" "${BUNDLE}/Contents/Info.plist"
+
 echo ""
-echo "✓ Built ${BUNDLE} ($(du -sh "${BUNDLE}" | cut -f1) on disk)"
+echo "✓ Built ${BUNDLE} v${BUILD_VERSION} ($(du -sh "${BUNDLE}" | cut -f1) on disk)"
 echo "  Run:  open ${BUNDLE}"
 echo "  Copy: cp -r ${BUNDLE} /Applications/"

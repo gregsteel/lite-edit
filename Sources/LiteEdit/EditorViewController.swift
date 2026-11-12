@@ -159,6 +159,13 @@ final class EditorViewController: NSViewController, NSTextViewDelegate {
         deferredHighlightVisible()
     }
 
+    /// Call after the document's language changes (e.g. Save As with a new extension).
+    func reloadLanguage() {
+        guard let doc = document else { return }
+        highlighter = Self.cachedHighlighter(for: doc.language)
+        rehighlightAll()
+    }
+
     /// Deferred to next run-loop so the scroll view geometry is settled
     /// after replaceTextStorage.  For small files the full document is
     /// highlighted; large files get viewport-only (scroll handles the rest).
@@ -265,6 +272,10 @@ final class EditorViewController: NSViewController, NSTextViewDelegate {
         }
     }
 
+    func undoManager(for view: NSTextView) -> UndoManager? {
+        document?.undoManager
+    }
+
     func textViewDidChangeSelection(_ n: Notification) {
         lineNumbers?.needsDisplay = true
         emitCursor()
@@ -285,88 +296,86 @@ final class EditorViewController: NSViewController, NSTextViewDelegate {
 
     // MARK: - Find / Replace
 
+    /// Plain-text searches are escaped so one regex engine handles both modes.
+    private func searchRegex(_ text: String, caseSensitive: Bool, regex: Bool) -> NSRegularExpression? {
+        guard !text.isEmpty else { return nil }
+        var opts: NSRegularExpression.Options = caseSensitive ? [] : [.caseInsensitive]
+        if regex { opts.insert(.anchorsMatchLines) }
+        let pattern = regex ? text : NSRegularExpression.escapedPattern(for: text)
+        return try? NSRegularExpression(pattern: pattern, options: opts)
+    }
+
+    /// Non-empty matches only (zero-length regex matches can't be selected or stepped through).
+    private func matches(of re: NSRegularExpression) -> [NSTextCheckingResult] {
+        let s = textView.string
+        return re.matches(in: s, range: NSRange(location: 0, length: (s as NSString).length))
+            .filter { $0.range.length > 0 }
+    }
+
+    private func selectMatch(_ r: NSRange) {
+        textView.setSelectedRange(r)
+        textView.scrollRangeToVisible(r)
+        textView.showFindIndicator(for: r)
+    }
+
     func findNext(_ text: String, caseSensitive: Bool = false, regex: Bool = false) -> Bool {
-        guard !text.isEmpty else { return false }
-        let ns = textView.string as NSString
+        guard let re = searchRegex(text, caseSensitive: caseSensitive, regex: regex) else { return false }
+        let ms = matches(of: re)
         let start = NSMaxRange(textView.selectedRange())
-        var opts: NSString.CompareOptions = []
-        if !caseSensitive { opts.insert(.caseInsensitive) }
-        if regex { opts.insert(.regularExpression) }
-        var r = ns.range(of: text, options: opts, range: NSRange(location: start, length: ns.length - start))
-        if r.location == NSNotFound {
-            r = ns.range(of: text, options: opts, range: NSRange(location: 0, length: ns.length))
-        }
-        if r.location != NSNotFound {
-            textView.setSelectedRange(r)
-            textView.scrollRangeToVisible(r)
-            textView.showFindIndicator(for: r)
-            return true
-        }
-        return false
+        guard let m = ms.first(where: { $0.range.location >= start }) ?? ms.first else { return false }
+        selectMatch(m.range)
+        return true
     }
 
-    func findPrev(_ text: String, caseSensitive: Bool = false) -> Bool {
-        guard !text.isEmpty else { return false }
-        let ns = textView.string as NSString
+    func findPrev(_ text: String, caseSensitive: Bool = false, regex: Bool = false) -> Bool {
+        guard let re = searchRegex(text, caseSensitive: caseSensitive, regex: regex) else { return false }
+        let ms = matches(of: re)
         let end = textView.selectedRange().location
-        var opts: NSString.CompareOptions = [.backwards]
-        if !caseSensitive { opts.insert(.caseInsensitive) }
-        var r = ns.range(of: text, options: opts, range: NSRange(location: 0, length: end))
-        if r.location == NSNotFound {
-            r = ns.range(of: text, options: opts, range: NSRange(location: 0, length: ns.length))
-        }
-        if r.location != NSNotFound {
-            textView.setSelectedRange(r)
-            textView.scrollRangeToVisible(r)
-            textView.showFindIndicator(for: r)
-            return true
-        }
-        return false
+        guard let m = ms.last(where: { $0.range.location < end }) ?? ms.last else { return false }
+        selectMatch(m.range)
+        return true
     }
 
-    func replaceCurrent(_ search: String, with repl: String, caseSensitive: Bool = false) -> Bool {
+    /// Replaces the selection if it is a match, then moves to the next match.
+    func replaceCurrent(_ search: String, with repl: String, caseSensitive: Bool = false, regex: Bool = false) -> Bool {
+        guard let re = searchRegex(search, caseSensitive: caseSensitive, regex: regex) else { return false }
         let sel = textView.selectedRange()
-        let selected = (textView.string as NSString).substring(with: sel)
-        let match = caseSensitive ? selected == search : selected.caseInsensitiveCompare(search) == .orderedSame
-        if match { textView.insertText(repl, replacementRange: sel) }
-        return findNext(search, caseSensitive: caseSensitive)
+        if let m = matches(of: re).first(where: { $0.range == sel }) {
+            let template = regex ? repl : NSRegularExpression.escapedTemplate(for: repl)
+            let replacement = re.replacementString(for: m, in: textView.string, offset: 0, template: template)
+            replaceUndoably(sel, with: replacement)
+        }
+        return findNext(search, caseSensitive: caseSensitive, regex: regex)
     }
 
-    func replaceAll(_ search: String, with repl: String, caseSensitive: Bool = false) -> Int {
-        guard !search.isEmpty else { return 0 }
-        let ranges = allRanges(search, caseSensitive: caseSensitive)
-        guard !ranges.isEmpty else { return 0 }
-        var result = textView.string
-        for r in ranges.reversed() {
-            guard let sr = Range(r, in: result) else { continue }
-            result.replaceSubrange(sr, with: repl)
-        }
-        textView.string = result
-        document?.content = result
-        document?.markModified()
-        delegate?.editorTextDidChange(self)
+    @discardableResult
+    func replaceAll(_ search: String, with repl: String, caseSensitive: Bool = false, regex: Bool = false) -> Int {
+        guard let re = searchRegex(search, caseSensitive: caseSensitive, regex: regex) else { return 0 }
+        let original = textView.string
+        let full = NSRange(location: 0, length: (original as NSString).length)
+        let count = re.numberOfMatches(in: original, range: full)
+        guard count > 0 else { return 0 }
+        let template = regex ? repl : NSRegularExpression.escapedTemplate(for: repl)
+        let result = re.stringByReplacingMatches(in: original, range: full, withTemplate: template)
+        let caret = textView.selectedRange().location
+        replaceUndoably(full, with: result)
+        textView.setSelectedRange(NSRange(location: min(caret, (result as NSString).length), length: 0))
         rehighlightAll()
-        return ranges.count
+        return count
     }
 
-    func matchCount(_ text: String, caseSensitive: Bool = false) -> Int {
-        allRanges(text, caseSensitive: caseSensitive).count
+    func matchCount(_ text: String, caseSensitive: Bool = false, regex: Bool = false) -> Int {
+        guard let re = searchRegex(text, caseSensitive: caseSensitive, regex: regex) else { return 0 }
+        return matches(of: re).count
     }
 
-    private func allRanges(_ text: String, caseSensitive: Bool) -> [NSRange] {
-        guard !text.isEmpty else { return [] }
-        let ns = textView.string as NSString
-        var opts: NSString.CompareOptions = []
-        if !caseSensitive { opts.insert(.caseInsensitive) }
-        var results: [NSRange] = []
-        var pos = 0
-        while pos < ns.length {
-            let r = ns.range(of: text, options: opts, range: NSRange(location: pos, length: ns.length - pos))
-            if r.location == NSNotFound { break }
-            results.append(r)
-            pos = NSMaxRange(r)
-        }
-        return results
+    /// Goes through shouldChangeText/didChangeText so the edit is undoable and the document updates.
+    private func replaceUndoably(_ range: NSRange, with str: String) {
+        suppressAutoIndent = true
+        defer { suppressAutoIndent = false }
+        guard textView.shouldChangeText(in: range, replacementString: str) else { return }
+        textView.replaceCharacters(in: range, with: str)
+        textView.didChangeText()
     }
 
     func goToLine(_ line: Int) {

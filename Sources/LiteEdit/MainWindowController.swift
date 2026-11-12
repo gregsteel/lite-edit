@@ -6,7 +6,8 @@ final class MainWindowController: NSWindowController,
     TabBarViewDelegate,
     SidebarDelegate,
     FindBarDelegate,
-    QuickOpenDelegate
+    QuickOpenDelegate,
+    NSWindowDelegate
 {
     private var splitView: NSSplitView!
     private var editorSplit: NSSplitView!
@@ -46,6 +47,7 @@ final class MainWindowController: NSWindowController,
         w.backgroundColor = Theme.background
 
         self.init(window: w)
+        w.delegate = self
         buildUI()
         newDocument()
         installKeyMonitor()
@@ -203,12 +205,19 @@ final class MainWindowController: NSWindowController,
     // MARK: - Document management
 
     func newDocument() {
-        let doc = Document()
-        documents.append(doc)
-        curIdx = documents.count - 1
-        editorVC.document = doc
-        refreshTabs()
-        refreshStatus()
+        documents.append(Document())
+        activateDocument(at: documents.count - 1)
+    }
+
+    /// Makes `index` the visible document, saving the outgoing tab's cursor first.
+    private func activateDocument(at index: Int) {
+        guard index >= 0, index < documents.count else { return }
+        if index != curIdx { saveCursorPosition() }
+        curIdx = index
+        editorVC.document = documents[index]
+        refreshTabs(); refreshStatus()
+        if let url = documents[index].fileURL { sidebarVC.revealFile(url) }
+        deferredRestoreCursor()
     }
 
     func openDocument() {
@@ -216,122 +225,169 @@ final class MainWindowController: NSWindowController,
         p.allowsMultipleSelection = true
         p.canChooseDirectories = false
         p.canChooseFiles = true
+        if let dir = curDoc?.fileURL?.deletingLastPathComponent() ?? sidebarVC.rootFolderURL {
+            p.directoryURL = dir
+        }
         p.beginSheetModal(for: window!) { [weak self] r in
             guard r == .OK else { return }
             p.urls.forEach { self?.openFile($0) }
         }
     }
 
+    /// Opens `url` in a new tab (or switches to it if already open).
+    /// An untouched "Untitled" tab is replaced rather than left behind.
     func openFile(_ url: URL) {
-        if let i = documents.firstIndex(where: { $0.fileURL == url }) {
-            saveCursorPosition()
-            curIdx = i
-            editorVC.document = documents[i]
-            refreshTabs(); refreshStatus()
+        let target = url.standardizedFileURL
+        if let i = documents.firstIndex(where: { $0.fileURL?.standardizedFileURL == target }) {
+            activateDocument(at: i)
             RecentItems.addFile(url)
-            sidebarVC.revealFile(url)
-            deferredRestoreCursor()
             return
         }
-        do {
-            saveCursorPosition()
-            let doc = try Document.open(url: url)
+        let doc: Document
+        do { doc = try Document.open(url: url) } catch {
+            showError(error)
+            return
+        }
+        if curDoc?.isPristine == true {
+            documents[curIdx] = doc
+            activateDocument(at: curIdx)
+        } else {
             documents.append(doc)
-            curIdx = documents.count - 1
-            editorVC.document = doc
-            refreshTabs(); refreshStatus()
-            window?.title = "LiteEdit — \(doc.displayName)"
-            RecentItems.addFile(url)
-            sidebarVC.revealFile(url)
-        } catch {
-            NSAlert(error: error).runModal()
+            activateDocument(at: documents.count - 1)
         }
-    }
-
-    private func openFileInCurrentTab(_ url: URL) {
-        if let i = documents.firstIndex(where: { $0.fileURL == url }) {
-            saveCursorPosition()
-            curIdx = i
-            editorVC.document = documents[i]
-            refreshTabs(); refreshStatus()
-            window?.title = "LiteEdit — \(documents[i].displayName)"
-            RecentItems.addFile(url)
-            sidebarVC.revealFile(url)
-            deferredRestoreCursor()
-            return
-        }
-        do {
-            saveCursorPosition()
-            let doc = try Document.open(url: url)
-            if curIdx >= 0, curIdx < documents.count {
-                let cur = documents[curIdx]
-                if !cur.isModified && (cur.fileURL == nil || cur.fileURL == url) {
-                    documents[curIdx] = doc
-                } else {
-                    documents.append(doc)
-                    curIdx = documents.count - 1
-                }
-            } else {
-                documents.append(doc)
-                curIdx = documents.count - 1
-            }
-            editorVC.document = doc
-            refreshTabs(); refreshStatus()
-            window?.title = "LiteEdit — \(doc.displayName)"
-            RecentItems.addFile(url)
-            sidebarVC.revealFile(url)
-        } catch {
-            NSAlert(error: error).runModal()
-        }
+        RecentItems.addFile(url)
     }
 
     func saveDocument() {
         guard let doc = curDoc else { return }
-        if doc.fileURL != nil {
-            do {
-                try doc.save()
-                refreshTabs()
-                sidebarVC.refreshGitStatus()
-            } catch { NSAlert(error: error).runModal() }
-        } else { saveDocumentAs() }
+        save(doc) { _ in }
     }
 
     func saveDocumentAs() {
         guard let doc = curDoc else { return }
+        saveAs(doc) { _ in }
+    }
+
+    /// Saves in place, or asks for a location if the document is untitled.
+    private func save(_ doc: Document, completion: @escaping (Bool) -> Void) {
+        guard doc.fileURL != nil else { saveAs(doc, completion: completion); return }
+        do {
+            try doc.save()
+            didSave(doc)
+            completion(true)
+        } catch {
+            showError(error)
+            completion(false)
+        }
+    }
+
+    private func saveAs(_ doc: Document, completion: @escaping (Bool) -> Void) {
+        guard let w = window else { completion(false); return }
         let p = NSSavePanel()
         p.canCreateDirectories = true
-        p.beginSheetModal(for: window!) { [weak self] r in
-            guard r == .OK, let url = p.url else { return }
+        p.nameFieldStringValue = doc.displayName
+        if let dir = doc.fileURL?.deletingLastPathComponent() ?? sidebarVC.rootFolderURL {
+            p.directoryURL = dir
+        }
+        p.beginSheetModal(for: w) { [weak self] r in
+            guard r == .OK, let url = p.url else { completion(false); return }
             do {
                 try doc.save(to: url)
-                self?.refreshTabs(); self?.refreshStatus()
-                self?.window?.title = "LiteEdit — \(doc.displayName)"
                 RecentItems.addFile(url)
-                self?.sidebarVC.refreshGitStatus()
-            } catch { NSAlert(error: error).runModal() }
+                if doc === self?.curDoc { self?.editorVC.reloadLanguage() }
+                self?.didSave(doc)
+                completion(true)
+            } catch {
+                self?.showError(error)
+                completion(false)
+            }
+        }
+    }
+
+    private func didSave(_ doc: Document) {
+        refreshTabs(); refreshStatus()
+        sidebarVC.refreshGitStatus()
+    }
+
+    private func showError(_ error: Error) {
+        if let w = window { NSAlert(error: error).beginSheetModal(for: w) }
+        else { NSAlert(error: error).runModal() }
+    }
+
+    /// Asks Save / Don't Save / Cancel for a modified document.
+    /// `proceed(true)` means the caller may close it (saved or discarded).
+    private func confirmClose(_ doc: Document, proceed: @escaping (Bool) -> Void) {
+        guard doc.isModified, let w = window else { proceed(true); return }
+        let a = NSAlert()
+        a.messageText = "Do you want to save the changes you made to \(doc.displayName)?"
+        a.informativeText = "Your changes will be lost if you don't save them."
+        a.addButton(withTitle: "Save")
+        a.addButton(withTitle: "Cancel")
+        a.addButton(withTitle: "Don't Save")
+        a.buttons[1].keyEquivalent = "\u{1b}"
+        a.buttons[2].keyEquivalent = "d"
+        a.buttons[2].keyEquivalentModifierMask = .command
+        a.beginSheetModal(for: w) { [weak self] resp in
+            a.window.orderOut(nil) // dismiss before a save panel sheet can appear
+            switch resp {
+            case .alertFirstButtonReturn: self?.save(doc, completion: proceed)
+            case .alertThirdButtonReturn: proceed(true)
+            default: proceed(false)
+            }
         }
     }
 
     func closeCurrentTab() {
-        guard curIdx >= 0, curIdx < documents.count else { return }
-        let doc = documents[curIdx]
-        if doc.isModified {
-            let a = NSAlert()
-            a.messageText = "Save changes to \(doc.displayName)?"
-            a.informativeText = "Your changes will be lost if you don't save them."
-            a.addButton(withTitle: "Save")
-            a.addButton(withTitle: "Don't Save")
-            a.addButton(withTitle: "Cancel")
-            let resp = a.runModal()
-            if resp == .alertFirstButtonReturn { saveDocument() }
-            else if resp == .alertThirdButtonReturn { return }
+        closeDocument(at: curIdx)
+    }
+
+    private func closeDocument(at index: Int) {
+        guard index >= 0, index < documents.count, window?.attachedSheet == nil else { return }
+        let doc = documents[index]
+        if doc.isModified && index != curIdx { activateDocument(at: index) } // show what's being asked about
+        confirmClose(doc) { [weak self] ok in
+            guard ok, let self = self, let i = self.documents.firstIndex(where: { $0 === doc }) else { return }
+            let wasCurrent = i == self.curIdx
+            if wasCurrent { self.saveCursorPosition() }
+            self.documents.remove(at: i)
+            if self.documents.isEmpty { self.curIdx = -1; self.newDocument(); return }
+            if wasCurrent {
+                self.curIdx = -1
+                self.activateDocument(at: min(i, self.documents.count - 1))
+            } else {
+                if i < self.curIdx { self.curIdx -= 1 }
+                self.refreshTabs()
+            }
         }
-        documents.remove(at: curIdx)
-        if documents.isEmpty { newDocument(); return }
-        curIdx = min(curIdx, documents.count - 1)
-        editorVC.document = documents[curIdx]
-        refreshTabs(); refreshStatus()
-        deferredRestoreCursor()
+    }
+
+    /// Walks every modified document asking to save. `done(false)` if the user cancels.
+    func reviewUnsavedChanges(_ done: @escaping (Bool) -> Void) {
+        var pending = documents.filter { $0.isModified }
+        func next() {
+            guard !pending.isEmpty else { done(true); return }
+            let doc = pending.removeFirst()
+            if let i = documents.firstIndex(where: { $0 === doc }) { activateDocument(at: i) }
+            confirmClose(doc) { ok in ok ? next() : done(false) }
+        }
+        next()
+    }
+
+    var hasUnsavedChanges: Bool { documents.contains { $0.isModified } }
+    /// Set once the user has reviewed unsaved changes for a window close, so quit doesn't ask again.
+    private(set) var unsavedChangesReviewed = false
+
+    // MARK: - NSWindowDelegate
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if unsavedChangesReviewed || !hasUnsavedChanges { return true }
+        guard sender.attachedSheet == nil else { return false }
+        reviewUnsavedChanges { [weak self] ok in
+            guard ok else { return }
+            self?.unsavedChangesReviewed = true
+            sender.close()
+        }
+        return false
     }
 
     func openFolder() {
@@ -436,15 +492,33 @@ final class MainWindowController: NSWindowController,
         )
     }
 
-    func showFind() {
+    /// Lays out find bar + split view; the find bar sits under the tab bar when visible.
+    private func layoutFindBar() {
         guard let cv = window?.contentView else { return }
         let tabH: CGFloat = 32
-        let findH: CGFloat = 34
         let statusH: CGFloat = 24
-        findBar.isHidden = false
+        let findH: CGFloat = findBar.isHidden ? 0 : findBar.preferredHeight
         findBar.frame = NSRect(x: 0, y: cv.bounds.height - tabH - findH, width: cv.bounds.width, height: findH)
         splitView.frame = NSRect(x: 0, y: statusH, width: cv.bounds.width, height: cv.bounds.height - tabH - findH - statusH)
-        findBar.activate()
+    }
+
+    func showFind(replace: Bool = false) {
+        // Prefill with the selection when it's a single-line snippet.
+        let ns = editorVC.textView.string as NSString
+        let sel = editorVC.textView.selectedRange()
+        var prefill: String?
+        if sel.length > 0, sel.length < 500 {
+            let s = ns.substring(with: sel)
+            if !s.contains("\n") { prefill = s }
+        }
+        findBar.isHidden = false
+        layoutFindBar()
+        findBar.activate(prefill: prefill, replace: replace)
+    }
+
+    func findNextFromMenu(backwards: Bool) {
+        guard !findBar.query.isEmpty else { showFind(); return }
+        backwards ? findBar.doPrev() : findBar.doNext()
     }
 
     func showGoToLine() {
@@ -521,8 +595,13 @@ final class MainWindowController: NSWindowController,
     }
 
     private func refreshStatus() {
-        if let doc = curDoc { statusBar.updateLanguage(doc.language) }
+        if let doc = curDoc {
+            statusBar.updateLanguage(doc.language)
+            window?.title = "LiteEdit — \(doc.displayName)"
+            window?.isDocumentEdited = doc.isModified
+        }
         syncMarkdownPreview(immediate: true)
+        if !findBar.isHidden { findBar.refreshCount() }
     }
 
     // MARK: - NSSplitViewDelegate
@@ -572,67 +651,53 @@ final class MainWindowController: NSWindowController,
     func editorTextDidChange(_ vc: EditorViewController) {
         if let doc = curDoc {
             tabBar.updateTab(at: curIdx, item: TabItem(title: doc.displayName, isModified: doc.isModified))
+            window?.isDocumentEdited = doc.isModified
         }
         refreshMarkdownPreview()
+        if !findBar.isHidden { findBar.refreshCount() }
     }
     func editorCursorMoved(_ vc: EditorViewController, line: Int, col: Int) { statusBar.updateCursor(line: line, col: col) }
 
     // MARK: - TabBarViewDelegate
 
     func tabBarDidSelectTab(at index: Int) {
-        guard index >= 0, index < documents.count else { return }
-        saveCursorPosition()
-        curIdx = index
-        editorVC.document = documents[index]
-        tabBar.selectTab(at: curIdx)
-        refreshStatus()
-        window?.title = "LiteEdit — \(curDoc?.displayName ?? "Untitled")"
-        if let url = documents[index].fileURL { sidebarVC.revealFile(url) }
-        deferredRestoreCursor()
+        activateDocument(at: index)
     }
 
     func tabBarDidCloseTab(at index: Int) {
-        let prev = curIdx
-        curIdx = index
-        closeCurrentTab()
-        if curIdx != prev { refreshTabs() }
+        closeDocument(at: index)
     }
 
     // MARK: - SidebarDelegate
 
     func sidebarDidSelectFile(_ url: URL, inNewTab: Bool) {
-        if inNewTab {
-            openFile(url)
-        } else {
-            openFileInCurrentTab(url)
-        }
+        openFile(url)
     }
 
     // MARK: - FindBarDelegate
 
-    func findBarNext(_ text: String, caseSensitive: Bool, regex: Bool) {
-        _ = editorVC.findNext(text, caseSensitive: caseSensitive, regex: regex)
+    func findBarNext(_ text: String, caseSensitive: Bool, regex: Bool) -> Bool {
+        editorVC.findNext(text, caseSensitive: caseSensitive, regex: regex)
     }
-    func findBarPrev(_ text: String, caseSensitive: Bool) {
-        _ = editorVC.findPrev(text, caseSensitive: caseSensitive)
+    func findBarPrev(_ text: String, caseSensitive: Bool, regex: Bool) -> Bool {
+        editorVC.findPrev(text, caseSensitive: caseSensitive, regex: regex)
     }
-    func findBarReplace(_ search: String, with replacement: String, caseSensitive: Bool) {
-        _ = editorVC.replaceCurrent(search, with: replacement, caseSensitive: caseSensitive)
+    func findBarReplace(_ search: String, with replacement: String, caseSensitive: Bool, regex: Bool) {
+        if !editorVC.replaceCurrent(search, with: replacement, caseSensitive: caseSensitive, regex: regex) { NSSound.beep() }
     }
-    func findBarReplaceAll(_ search: String, with replacement: String, caseSensitive: Bool) {
-        _ = editorVC.replaceAll(search, with: replacement, caseSensitive: caseSensitive)
+    func findBarReplaceAll(_ search: String, with replacement: String, caseSensitive: Bool, regex: Bool) {
+        if editorVC.replaceAll(search, with: replacement, caseSensitive: caseSensitive, regex: regex) == 0 { NSSound.beep() }
     }
     func findBarDismissed() {
-        guard let cv = window?.contentView else { return }
-        let tabH: CGFloat = 32
-        let statusH: CGFloat = 24
         findBar.isHidden = true
-        findBar.frame.size.height = 0
-        splitView.frame = NSRect(x: 0, y: statusH, width: cv.bounds.width, height: cv.bounds.height - tabH - statusH)
+        layoutFindBar()
         window?.makeFirstResponder(editorVC.textView)
     }
-    func findBarMatchCount(_ text: String, caseSensitive: Bool) -> Int {
-        editorVC.matchCount(text, caseSensitive: caseSensitive)
+    func findBarHeightChanged() {
+        if !findBar.isHidden { layoutFindBar() }
+    }
+    func findBarMatchCount(_ text: String, caseSensitive: Bool, regex: Bool) -> Int {
+        editorVC.matchCount(text, caseSensitive: caseSensitive, regex: regex)
     }
 
     // MARK: - Session persistence
@@ -676,13 +741,6 @@ final class MainWindowController: NSWindowController,
             openFile(URL(fileURLWithPath: path))
         }
 
-        if let i = documents.firstIndex(where: { $0.fileURL == nil && !$0.isModified && $0.content.isEmpty }),
-           documents.count > 1 {
-            documents.remove(at: i)
-            if curIdx >= i && curIdx > 0 { curIdx -= 1 }
-            if curIdx >= documents.count { curIdx = documents.count - 1 }
-        }
-
         let cursors = ud.dictionary(forKey: Self.sessionCursorsKey) as? [String: Int] ?? [:]
         for doc in documents {
             if let path = doc.fileURL?.path, let pos = cursors[path] {
@@ -697,9 +755,6 @@ final class MainWindowController: NSWindowController,
         }
         refreshTabs()
         refreshStatus()
-        if let name = curDoc?.displayName {
-            window?.title = "LiteEdit — \(name)"
-        }
 
         DispatchQueue.main.async { [weak self] in
             self?.restoreCursorPosition()

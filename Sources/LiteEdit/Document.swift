@@ -8,6 +8,8 @@ final class Document {
     var cursorPosition: Int = 0
     var scrollOffset: NSPoint = .zero
     var cachedTextStorage: NSTextStorage?
+    /// Per-document undo stack — the editor's single NSTextView is shared across tabs.
+    let undoManager = UndoManager()
     private var savedContent: String
 
     init(fileURL: URL? = nil, content: String = "", language: Language = .plainText) {
@@ -18,6 +20,8 @@ final class Document {
     }
 
     var displayName: String { fileURL?.lastPathComponent ?? "Untitled" }
+    /// Untitled, empty and untouched — safe to replace when opening a file.
+    var isPristine: Bool { fileURL == nil && !isModified && content.isEmpty }
     var title: String { isModified ? "\(displayName) •" : displayName }
 
     func markModified() {

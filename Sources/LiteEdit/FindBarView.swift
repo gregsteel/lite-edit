@@ -1,12 +1,13 @@
 import AppKit
 
 protocol FindBarDelegate: AnyObject {
-    func findBarNext(_ text: String, caseSensitive: Bool, regex: Bool)
-    func findBarPrev(_ text: String, caseSensitive: Bool)
-    func findBarReplace(_ search: String, with replacement: String, caseSensitive: Bool)
-    func findBarReplaceAll(_ search: String, with replacement: String, caseSensitive: Bool)
+    func findBarNext(_ text: String, caseSensitive: Bool, regex: Bool) -> Bool
+    func findBarPrev(_ text: String, caseSensitive: Bool, regex: Bool) -> Bool
+    func findBarReplace(_ search: String, with replacement: String, caseSensitive: Bool, regex: Bool)
+    func findBarReplaceAll(_ search: String, with replacement: String, caseSensitive: Bool, regex: Bool)
     func findBarDismissed()
-    func findBarMatchCount(_ text: String, caseSensitive: Bool) -> Int
+    func findBarHeightChanged()
+    func findBarMatchCount(_ text: String, caseSensitive: Bool, regex: Bool) -> Int
 }
 
 final class FindBarView: NSView, NSTextFieldDelegate {
@@ -26,9 +27,8 @@ final class FindBarView: NSView, NSTextFieldDelegate {
     private var showReplace  = false
     private var replaceRow: NSView!
 
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: showReplace ? 66 : 34)
-    }
+    var preferredHeight: CGFloat { showReplace ? 66 : 34 }
+    var query: String { searchField.stringValue }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -63,6 +63,7 @@ final class FindBarView: NSView, NSTextFieldDelegate {
         replaceField.placeholderString = "Replace"
         replaceField.font = Theme.uiFontSmall
         replaceField.focusRingType = .none
+        replaceField.delegate = self
         replaceField.translatesAutoresizingMaskIntoConstraints = false
 
         matchLabel.font = Theme.uiFontSmall
@@ -161,46 +162,61 @@ final class FindBarView: NSView, NSTextFieldDelegate {
         dst.translatesAutoresizingMaskIntoConstraints = false
     }
 
-    func activate() { window?.makeFirstResponder(searchField) }
+    /// Shows the bar focused on the search field, optionally prefilled and with the replace row.
+    func activate(prefill: String? = nil, replace: Bool = false) {
+        if let p = prefill, !p.isEmpty { searchField.stringValue = p }
+        if replace && !showReplace { toggleReplace() }
+        window?.makeFirstResponder(searchField)
+        refreshCount()
+    }
+
+    private var isCase: Bool { caseBtn.state == .on }
+    private var isRegex: Bool { regexBtn.state == .on }
 
     // MARK: - Actions
 
-    @objc private func doNext() {
-        delegate?.findBarNext(searchField.stringValue, caseSensitive: caseBtn.state == .on, regex: regexBtn.state == .on)
+    @objc func doNext() {
+        guard !query.isEmpty else { return }
+        if delegate?.findBarNext(query, caseSensitive: isCase, regex: isRegex) != true { NSSound.beep() }
     }
-    @objc private func doPrev() {
-        delegate?.findBarPrev(searchField.stringValue, caseSensitive: caseBtn.state == .on)
+    @objc func doPrev() {
+        guard !query.isEmpty else { return }
+        if delegate?.findBarPrev(query, caseSensitive: isCase, regex: isRegex) != true { NSSound.beep() }
     }
     @objc private func doClose() {
-        isHidden = true
         delegate?.findBarDismissed()
     }
     @objc private func toggleCase() {
-        caseBtn.state = caseBtn.state == .on ? .off : .on
+        caseBtn.state = isCase ? .off : .on
+        caseBtn.contentTintColor = isCase ? .controlAccentColor : Theme.tabText
         refreshCount()
     }
     @objc private func toggleRegex() {
-        regexBtn.state = regexBtn.state == .on ? .off : .on
+        regexBtn.state = isRegex ? .off : .on
+        regexBtn.contentTintColor = isRegex ? .controlAccentColor : Theme.tabText
+        refreshCount()
     }
     @objc private func doReplace() {
-        delegate?.findBarReplace(searchField.stringValue, with: replaceField.stringValue, caseSensitive: caseBtn.state == .on)
+        guard !query.isEmpty else { return }
+        delegate?.findBarReplace(query, with: replaceField.stringValue, caseSensitive: isCase, regex: isRegex)
+        refreshCount()
     }
     @objc private func doReplaceAll() {
-        delegate?.findBarReplaceAll(searchField.stringValue, with: replaceField.stringValue, caseSensitive: caseBtn.state == .on)
+        guard !query.isEmpty else { return }
+        delegate?.findBarReplaceAll(query, with: replaceField.stringValue, caseSensitive: isCase, regex: isRegex)
         refreshCount()
     }
     @objc private func toggleReplace() {
         showReplace.toggle()
         replaceRow.isHidden = !showReplace
-        invalidateIntrinsicContentSize()
-        superview?.needsLayout = true
+        expandBtn.contentTintColor = showReplace ? .controlAccentColor : Theme.tabText
+        delegate?.findBarHeightChanged()
     }
 
-    private func refreshCount() {
-        let t = searchField.stringValue
-        if t.isEmpty { matchLabel.stringValue = ""; return }
-        let n = delegate?.findBarMatchCount(t, caseSensitive: caseBtn.state == .on) ?? 0
-        matchLabel.stringValue = "\(n) match\(n == 1 ? "" : "es")"
+    func refreshCount() {
+        if query.isEmpty { matchLabel.stringValue = ""; return }
+        let n = delegate?.findBarMatchCount(query, caseSensitive: isCase, regex: isRegex) ?? 0
+        matchLabel.stringValue = n == 0 ? "No results" : "\(n) match\(n == 1 ? "" : "es")"
     }
 
     // MARK: - NSTextFieldDelegate
@@ -210,8 +226,16 @@ final class FindBarView: NSView, NSTextFieldDelegate {
     }
 
     func control(_ control: NSControl, textView tv: NSTextView, doCommandBy sel: Selector) -> Bool {
-        if sel == #selector(insertNewline(_:)) { doNext(); return true }
         if sel == #selector(cancelOperation(_:)) { doClose(); return true }
+        if sel == #selector(insertNewline(_:)) {
+            let shift = NSApp.currentEvent?.modifierFlags.contains(.shift) == true
+            if control === replaceField {
+                shift ? doReplaceAll() : doReplace()
+            } else {
+                shift ? doPrev() : doNext()
+            }
+            return true
+        }
         return false
     }
 }

@@ -125,6 +125,32 @@ enum MarkdownHTML {
                 continue
             }
 
+            // GFM table: header row, then a delimiter row like |---|:--:|
+            if trimmed.contains("|"), i + 1 < lines.count,
+               let aligns = tableAlignments(lines[i + 1]),
+               tableCells(trimmed).count == aligns.count {
+                flushPara()
+                closeList()
+                func row(_ cells: [String], _ tag: String) -> String {
+                    var out = "<tr>"
+                    for (c, align) in zip(cells + Array(repeating: "", count: max(0, aligns.count - cells.count)), aligns) {
+                        let style = align.map { " style=\"text-align:\($0)\"" } ?? ""
+                        out += "<\(tag)\(style)>\(inline(c))</\(tag)>"
+                    }
+                    return out + "</tr>\n"
+                }
+                html += "<table>\n<thead>\n" + row(tableCells(trimmed), "th") + "</thead>\n<tbody>\n"
+                i += 2
+                while i < lines.count {
+                    let r = lines[i].trimmingCharacters(in: .whitespaces)
+                    guard !r.isEmpty, r.contains("|") else { break }
+                    html += row(tableCells(r), "td")
+                    i += 1
+                }
+                html += "</tbody>\n</table>\n"
+                continue
+            }
+
             closeList()
             para.append(trimmed)
             i += 1
@@ -257,6 +283,36 @@ enum MarkdownHTML {
         let after = t[t.index(after: dot)...]
         guard after.hasPrefix(" ") else { return nil }
         return String(after.dropFirst()).trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Splits `| a | b |` into trimmed cells; `\|` stays a literal pipe.
+    private static func tableCells(_ line: String) -> [String] {
+        var t = line.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("|") { t.removeFirst() }
+        if t.hasSuffix("|") && !t.hasSuffix("\\|") { t.removeLast() }
+        var cells: [String] = [], cur = "", prev: Character = " "
+        for ch in t {
+            if ch == "|" && prev != "\\" { cells.append(cur); cur = "" }
+            else if ch == "|" { cur.removeLast(); cur.append(ch) }
+            else { cur.append(ch) }
+            prev = ch
+        }
+        cells.append(cur)
+        return cells.map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
+    /// Parses a delimiter row (`|---|:--:|--:|`) into per-column alignment, or nil if it isn't one.
+    private static func tableAlignments(_ line: String) -> [String?]? {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        guard t.contains("|") || t.contains("-") else { return nil }
+        let cells = tableCells(t)
+        var aligns: [String?] = []
+        for c in cells {
+            guard c.range(of: #"^:?-+:?$"#, options: .regularExpression) != nil else { return nil }
+            let l = c.hasPrefix(":"), r = c.hasSuffix(":")
+            aligns.append(l && r ? "center" : r ? "right" : l ? "left" : nil)
+        }
+        return aligns
     }
 
     // MARK: - Inline

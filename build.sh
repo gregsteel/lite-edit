@@ -152,5 +152,15 @@ plutil -replace CFBundleVersion -string "$BUILD_VERSION" "${BUNDLE}/Contents/Inf
 
 echo ""
 echo "✓ Built ${BUNDLE} v${BUILD_VERSION} ($(du -sh "${BUNDLE}" | cut -f1) on disk)"
-echo "  Run:  open ${BUNDLE}"
-echo "  Copy: cp -r ${BUNDLE} /Applications/"
+
+# Install into /Applications (skipped on CI, or with NO_INSTALL=1).
+# Remove the old bundle first: overwriting a binary in place makes macOS kill it
+# on launch with "Code Signature Invalid".
+if [ -z "${CI:-}" ] && [ -z "${NO_INSTALL:-}" ]; then
+  rm -rf "/Applications/${BUNDLE}"
+  cp -R "${BUNDLE}" /Applications/
+  echo "✓ Installed /Applications/${BUNDLE}"
+  echo "  Run:  open /Applications/${BUNDLE}"
+else
+  echo "  Run:  open ${BUNDLE}"
+fi

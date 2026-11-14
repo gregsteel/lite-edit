@@ -61,19 +61,41 @@ final class MarkdownPreviewViewController: NSViewController, WKNavigationDelegat
         }
         updateWorkItem = work
         if debounce {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+            let hasDiagrams = markdown.contains("```mermaid") || markdown.contains("```plantuml") || markdown.contains("```puml")
+                || markdown.hasPrefix("@start") || lastHTML.contains("class=\"mermaid\"")
+            DispatchQueue.main.asyncAfter(deadline: .now() + (hasDiagrams ? 0.6 : 0.12), execute: work)
         } else {
             DispatchQueue.main.async(execute: work)
         }
     }
 
     private func render(markdown: String, baseURL: URL?) {
-        let body = MarkdownHTML.convert(markdown)
+        var pending: [String] = []
+        let body = MarkdownHTML.convert(markdown, plantuml: { src in
+            if let f = PlantUML.fragment(for: src) { return f }
+            pending.append(src)
+            return nil
+        })
         let html = MarkdownHTML.document(body: body)
         guard html != lastHTML else { return }
         lastHTML = html
         let base = baseURL?.deletingLastPathComponent()
         webView.loadHTMLString(html, baseURL: base)
+
+        // Diagrams render in the background and are swapped in without reloading the page.
+        for src in Set(pending) {
+            PlantUML.render(src) { [weak self] fragment in
+                self?.inject(fragment, forKey: PlantUML.key(src))
+            }
+        }
+    }
+
+    private func inject(_ fragment: String, forKey key: String) {
+        guard let data = try? JSONSerialization.data(withJSONObject: [fragment, key]),
+              let arg = String(data: data, encoding: .utf8) else { return }
+        webView.evaluateJavaScript("""
+        (function(a){document.querySelectorAll('[data-key="'+a[1]+'"]').forEach(function(e){e.classList.remove('pending');e.innerHTML=a[0];});})(\(arg));
+        """)
     }
 
     // Keep clicks on links from navigating away; open externally.

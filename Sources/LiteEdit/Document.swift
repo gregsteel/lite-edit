@@ -54,7 +54,7 @@ final class Document {
 
     enum Language: String, CaseIterable {
         case swift, python, javascript, typescript, html, css, json, markdown
-        case rust, go, c, cpp, java, ruby, shell, xml, yaml, sql, toml, plainText
+        case rust, go, c, cpp, java, ruby, shell, xml, yaml, sql, toml, mermaid, plantuml, plainText
 
         var displayName: String {
             switch self {
@@ -77,9 +77,14 @@ final class Document {
             case .yaml:       return "YAML"
             case .sql:        return "SQL"
             case .toml:       return "TOML"
+            case .mermaid:    return "Mermaid"
+            case .plantuml:   return "PlantUML"
             case .plainText:  return "Plain Text"
             }
         }
+
+        /// Languages that get the side-by-side rendered preview.
+        var hasPreview: Bool { self == .markdown || self == .mermaid || self == .plantuml }
     }
 
     static func detectLanguage(for url: URL) -> Language {
@@ -103,6 +108,8 @@ final class Document {
         case "yml", "yaml":                    return .yaml
         case "sql":                            return .sql
         case "toml":                           return .toml
+        case "mmd", "mermaid":                 return .mermaid
+        case "puml", "plantuml", "pu", "wsd":  return .plantuml
         default:                               return .plainText
         }
     }

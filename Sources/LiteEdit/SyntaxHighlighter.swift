@@ -224,7 +224,7 @@ final class SyntaxHighlighter {
                 ("\\b(true|false)\\b", Theme.number),
                 ("\\b\\d+(\\.\\d+)?\\b", Theme.number),
             ]
-        case .plainText:
+        case .plainText, .mermaid, .plantuml:
             defs = []
         }
 

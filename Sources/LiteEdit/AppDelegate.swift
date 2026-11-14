@@ -1,6 +1,6 @@
 import AppKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemValidation {
     private var windowController: MainWindowController?
     private var recentMenu: NSMenu!
 
@@ -78,6 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         fileMenu.addItem(.separator())
         fileMenu.addItem(item("Save", #selector(doSave), "s"))
         fileMenu.addItem(item("Save As...", #selector(doSaveAs), "S"))
+        fileMenu.addItem(item("Export Preview as PDF...", #selector(doExportPreviewPDF), "E"))
         fileMenu.addItem(.separator())
         fileMenu.addItem(item("Close Tab", #selector(doClose), "w"))
         fileItem.submenu = fileMenu
@@ -136,6 +137,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         NSApp.mainMenu = main
         NSApp.windowsMenu = winMenu
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(doExportPreviewPDF) {
+            return windowController?.canExportPreviewPDF ?? false
+        }
+        return true
     }
 
     private func item(_ title: String, _ action: Selector, _ key: String) -> NSMenuItem {
@@ -227,6 +235,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func doQuickOpen()     { ensureWindowControllerReady().showQuickOpen() }
     @objc func doToggleSidebar() { ensureWindowControllerReady().toggleSidebar() }
     @objc func doToggleMarkdownPreview() { ensureWindowControllerReady().toggleMarkdownPreview() }
+    @objc func doExportPreviewPDF() { ensureWindowControllerReady().exportPreviewPDF() }
     @objc func doBeautify() { ensureWindowControllerReady().beautifyDocument() }
 
     @objc func doRegisterDefaults() {

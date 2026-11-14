@@ -16,7 +16,7 @@ enum Beautifier {
             return beautifyBraces(text, indentSize: 2)
         case .javascript, .typescript, .swift, .c, .cpp, .java, .go, .rust:
             return beautifyBraces(text, indentSize: 4)
-        case .python, .ruby, .shell, .yaml, .toml, .sql, .markdown, .plainText:
+        case .python, .ruby, .shell, .yaml, .toml, .sql, .markdown, .mermaid, .plantuml, .plainText:
             return normalizeWhitespace(text)
         }
     }

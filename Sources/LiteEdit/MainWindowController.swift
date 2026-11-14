@@ -439,9 +439,39 @@ final class MainWindowController: NSWindowController,
         syncMarkdownPreview(immediate: true)
     }
 
+    var canExportPreviewPDF: Bool { curDoc?.language.hasPreview == true }
+
+    /// Exports the rendered Markdown of the current document as a paginated PDF.
+    func exportPreviewPDF() {
+        guard let w = window, let doc = curDoc, doc.language.hasPreview else { NSSound.beep(); return }
+        let p = NSSavePanel()
+        p.canCreateDirectories = true
+        p.allowedContentTypes = [.pdf]
+        p.nameFieldStringValue = (doc.displayName as NSString).deletingPathExtension + ".pdf"
+        if let dir = doc.fileURL?.deletingLastPathComponent() ?? sidebarVC.rootFolderURL {
+            p.directoryURL = dir
+        }
+        p.beginSheetModal(for: w) { [weak self] r in
+            guard r == .OK, let url = p.url, let self = self, self.curDoc === doc else { return }
+            MarkdownPDFExporter.export(
+                markdown: MarkdownHTML.previewSource(self.editorVC.textView.string, language: doc.language),
+                baseURL: doc.fileURL,
+                to: url,
+                window: w
+            ) { success in
+                guard !success else { return }
+                let alert = NSAlert()
+                alert.alertStyle = .warning
+                alert.messageText = "Couldn’t export PDF"
+                alert.informativeText = "The preview could not be saved to “\(url.lastPathComponent)”."
+                alert.beginSheetModal(for: w)
+            }
+        }
+    }
+
     /// Shows the preview for Markdown when enabled; removes it for every other file type.
     private func syncMarkdownPreview(immediate: Bool = false) {
-        let wantVisible = markdownPreviewEnabled && curDoc?.language == .markdown
+        let wantVisible = markdownPreviewEnabled && curDoc?.language.hasPreview == true
         if wantVisible != markdownPreviewVisible {
             markdownPreviewVisible = wantVisible
             applyMarkdownPreviewVisibility(refresh: wantVisible)
@@ -484,9 +514,9 @@ final class MainWindowController: NSWindowController,
     }
 
     private func refreshMarkdownPreview(immediate: Bool = false) {
-        guard markdownPreviewVisible, let doc = curDoc, doc.language == .markdown else { return }
+        guard markdownPreviewVisible, let doc = curDoc, doc.language.hasPreview else { return }
         previewVC.update(
-            markdown: editorVC.textView.string,
+            markdown: MarkdownHTML.previewSource(editorVC.textView.string, language: doc.language),
             baseURL: doc.fileURL,
             debounce: !immediate
         )

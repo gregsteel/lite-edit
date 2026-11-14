@@ -2,7 +2,17 @@ import Foundation
 
 /// Lightweight Markdown → HTML converter for preview (CommonMark subset + GFM extras).
 enum MarkdownHTML {
-    static func convert(_ markdown: String) -> String {
+    /// Wraps non-Markdown diagram files so they render through the same pipeline.
+    static func previewSource(_ text: String, language: Document.Language) -> String {
+        switch language {
+        case .mermaid:  return "```mermaid\n\(text)\n```"
+        case .plantuml: return "```plantuml\n\(text)\n```"
+        default:        return text
+        }
+    }
+
+    /// `plantuml` supplies an HTML fragment for a diagram source, or nil when it still has to be rendered.
+    static func convert(_ markdown: String, plantuml: ((String) -> String?)? = nil) -> String {
         let lines = markdown.replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
             .components(separatedBy: "\n")
@@ -35,9 +45,7 @@ enum MarkdownHTML {
 
             if inCodeBlock {
                 if line.hasPrefix("```") {
-                    let body = escape(codeLines.joined(separator: "\n"))
-                    let cls = codeLang.isEmpty ? "" : " class=\"language-\(escapeAttr(codeLang))\""
-                    html += "<pre><code\(cls)>\(body)</code></pre>\n"
+                    html += codeBlock(lang: codeLang, code: codeLines.joined(separator: "\n"), plantuml: plantuml)
                     codeLines = []
                     codeLang = ""
                     inCodeBlock = false
@@ -159,14 +167,47 @@ enum MarkdownHTML {
         flushPara()
         closeList()
         if inCodeBlock {
-            let body = escape(codeLines.joined(separator: "\n"))
-            html += "<pre><code>\(body)</code></pre>\n"
+            html += codeBlock(lang: codeLang, code: codeLines.joined(separator: "\n"), plantuml: plantuml)
         }
         return html
     }
 
-    static func document(body: String, title: String = "Preview") -> String {
-        """
+    private static func codeBlock(lang: String, code: String, plantuml: ((String) -> String?)?) -> String {
+        switch lang.lowercased() {
+        case "mermaid":
+            return "<pre class=\"mermaid\">\(escape(code))</pre>\n"
+        case "plantuml", "puml":
+            guard let plantuml = plantuml else { break }
+            let key = PlantUML.key(code)
+            if let fragment = plantuml(code) {
+                return "<div class=\"diagram\" data-key=\"\(key)\">\(fragment)</div>\n"
+            }
+            return "<div class=\"diagram pending\" data-key=\"\(key)\"><div class=\"note\">Rendering diagram…</div>"
+                + "<pre><code>\(escape(code))</code></pre></div>\n"
+        default: break
+        }
+        let cls = lang.isEmpty ? "" : " class=\"language-\(escapeAttr(lang))\""
+        return "<pre><code\(cls)>\(escape(code))</code></pre>\n"
+    }
+
+    static func document(body: String, title: String = "Preview", forPrint: Bool = false) -> String {
+        // Mermaid is fetched from a CDN only when the document contains a mermaid block,
+        // so ordinary documents pay nothing for it.
+        let mermaidScript = body.contains("<pre class=\"mermaid\">") ? """
+        <script src="https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.min.js"></script>
+        <script>
+        (function () {
+          function done() { window.__diagramsDone = true; }
+          if (typeof mermaid === 'undefined') {
+            document.querySelectorAll('pre.mermaid').forEach(function (e) { e.classList.add('failed'); });
+            return done();
+          }
+          mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: '\(forPrint ? "default" : "dark")' });
+          mermaid.run({ querySelector: 'pre.mermaid', suppressErrors: true }).then(done, done);
+        })();
+        </script>
+        """ : "<script>window.__diagramsDone = true;</script>"
+        return """
         <!DOCTYPE html>
         <html>
         <head>
@@ -244,10 +285,40 @@ enum MarkdownHTML {
             border: 1px solid var(--border); padding: 6px 10px; text-align: left;
           }
           th { background: var(--code-bg); }
+          pre.mermaid { background: none; border: none; text-align: center; padding: 0; overflow-x: auto; }
+          pre.mermaid.failed::before { content: "Mermaid couldn’t load (offline?) — showing source"; display: block; color: var(--muted); font: 12px sans-serif; margin-bottom: 6px; }
+          .diagram { background: #fff; color: #1f2328; border-radius: 6px; padding: 12px; margin: 1em 0; overflow-x: auto; text-align: center; }
+          .diagram svg { max-width: 100%; height: auto; }
+          .diagram pre { text-align: left; }
+          .diagram .note { color: #59636e; font: 12px sans-serif; margin-bottom: 6px; }
+          /* PDF export / printing: light, paper-friendly variant of the preview. */
+          @media print {
+            :root {
+              color-scheme: light;
+              --bg: #ffffff;
+              --fg: #1f2328;
+              --muted: #59636e;
+              --accent: #0969da;
+              --string: #1f2328;
+              --keyword: #d0d7de;
+              --code-bg: #f6f8fa;
+              --border: #d0d7de;
+            }
+            * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            html, body { font-size: 12px; }
+            body { padding: 0; max-width: none; }
+            strong, em { color: inherit; }
+            pre { overflow: visible; white-space: pre-wrap; word-wrap: break-word; }
+            pre code { font-size: 10.5px; }
+            h1, h2, h3, h4, h5, h6 { break-after: avoid; }
+            h1:first-child { margin-top: 0; }
+            pre, blockquote, table, img, tr { break-inside: avoid; }
+          }
         </style>
         </head>
         <body>
         \(body)
+        \(mermaidScript)
         </body>
         </html>
         """
@@ -368,7 +439,7 @@ enum MarkdownHTML {
         return result
     }
 
-    private static func escape(_ s: String) -> String {
+    static func escape(_ s: String) -> String {
         s.replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
